@@ -1,76 +1,146 @@
 import cv2
-import mediapipe as mp
-import pyttsx3
-from pose_detector import PoseDetector
-from exercises.bicep_curl import BicepCurl
+import time
+import os
+from dotenv import load_dotenv
 
-# Initialize text-to-speech engine
-engine = pyttsx3.init()
-engine.setProperty('rate', 150)
-engine.setProperty('volume', 0.9)
+# Load environment variables from .env file
+load_dotenv()
 
-# MediaPipe drawing utilities for skeleton visualization
-mp_pose = mp.solutions.pose
-mp_drawing = mp.solutions.drawing_utils
-mp_drawing_styles = mp.solutions.drawing_styles
+# Set up Gemini API key
+os.environ['GOOGLE_API_KEY'] = os.getenv('GEMINI_API_KEY')
 
-def main():
-    cap = cv2.VideoCapture(0)
-    pose = PoseDetector()
-    exercise = BicepCurl()
-    prev_reps = 0
+from pose.pose_detector import PoseDetector
+from exercises.lateral_raise import LateralRaise
 
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
+from profile.user_profile import UserProfile
+from memory.session_memory import SessionMemory
+from llm.gemini_coach import get_coaching_feedback
+from feedback.voice import VoiceCoach
+from utils.save_session import save_session
 
-        result = pose.process(frame)
+from analysis.fatigue import fatigue_score
+from ui.level_bar import draw_level_bar
 
-        # Draw skeleton (landmarks and connections)
-        if result.pose_landmarks:
-            mp_drawing.draw_landmarks(
-                frame,
-                result.pose_landmarks,
-                mp_pose.POSE_CONNECTIONS,
-                landmark_drawing_spec=mp_drawing_styles.get_default_pose_landmarks_style()
-            )
+# -----------------------
+# USER SETUP (TEMP)
+# -----------------------
+user = UserProfile(
+    height_cm=172,
+    weight_kg=70,
+    age=22,
+    gender="male"
+)
 
-            output = exercise.analyze(result.pose_landmarks.landmark)
+memory = SessionMemory()
+voice = VoiceCoach()
 
-            # Voice announcement when new rep is completed
-            if output["reps"] > prev_reps:
-                rep_message = f"Good rep! {output['reps']} reps completed"
-                print(rep_message)
-                engine.say(rep_message)
-                engine.runAndWait()
-                prev_reps = output["reps"]
+# -----------------------
+# WORKOUT SETUP
+# -----------------------
+pose = PoseDetector()
+exercise = LateralRaise()
+cap = cv2.VideoCapture(0)
 
-            if output["angle"] is not None:
-                cv2.putText(frame, f"Angle: {output['angle']}",
-                            (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2)
+# -----------------------
+# FATIGUE TRACKING STATE
+# -----------------------
+rep_times = []
+rom_values = []
 
-            cv2.putText(frame, f"Reps: {output['reps']}",
-                        (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0,255,0), 2)
+last_rep_count = 0
+rep_start_time = None
+current_rom = 0
 
-            cv2.putText(frame, output["feedback"],
-                        (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2)
+# -----------------------
+# MAIN LOOP
+# -----------------------
+while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret:
+        break
 
-        # Display press 'c' to close hint
-        cv2.putText(frame, "Press 'c' to close",
-                    (20, frame.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
+    result = pose.process(frame)
 
-        cv2.imshow("Gym Pose AI", frame)
+    if result.pose_landmarks:
+        pose.draw(frame, result.pose_landmarks)
 
-        # Check for 'c' key to close webcam
-        key = cv2.waitKey(10) & 0xFF
-        if key == ord("c"):
-            print("Closing webcam...")
-            break
+        output = exercise.analyze(result.pose_landmarks.landmark)
+        reps = output["reps"]
+        angle = output.get("angle")
 
-    cap.release()
-    cv2.destroyAllWindows()
-    engine.stop()
+        # -----------------------
+        # TRACK RANGE OF MOTION
+        # -----------------------
+        if angle is not None:
+            current_rom = max(current_rom, angle)
 
-if __name__ == "__main__":
-    main()
+        # -----------------------
+        # REP COMPLETION
+        # -----------------------
+        if reps > last_rep_count:
+            now = time.time()
+
+            if rep_start_time is not None:
+                rep_times.append(now - rep_start_time)
+                rom_values.append(current_rom)
+
+            rep_start_time = now
+            current_rom = 0
+            last_rep_count = reps
+
+        # -----------------------
+        # FATIGUE + FORM SCORES
+        # -----------------------
+        fatigue = fatigue_score(rep_times, rom_values)
+        form_quality = max(0.0, 1.0 - fatigue)
+
+        # -----------------------
+        # UI OVERLAYS
+        # -----------------------
+        cv2.putText(frame, f"REPS: {reps}",
+                    (30, 60), cv2.FONT_HERSHEY_SIMPLEX, 1,
+                    (0,255,0), 3)
+
+        draw_level_bar(frame, fatigue, "FATIGUE",
+                       color=(0,0,255), x=30, y=120)
+
+        draw_level_bar(frame, form_quality, "FORM",
+                       color=(0,255,255), x=30, y=160)
+
+    cv2.imshow("Gym Pose AI", frame)
+
+    if cv2.waitKey(10) & 0xFF == ord("q"):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
+
+# -----------------------
+# END OF WORKOUT
+# -----------------------
+
+exercise_name = "Lateral Raise"
+used_weight = 7.5  # kg (can be user input later)
+reps_done = exercise.counter
+
+# Simple calorie proxy
+calories = reps_done * used_weight * 0.06
+
+memory.log(exercise_name, reps_done, used_weight, calories)
+summary = memory.summary()
+
+# -----------------------
+# LLM COACH (POST SESSION)
+# -----------------------
+feedback = get_coaching_feedback(user, summary)
+
+# 🔊 OPTION 1: SPEAK
+voice.speak(feedback)
+
+# 🖥 OPTION 2: SHOW
+print("\n===== WORKOUT FEEDBACK =====\n")
+print(feedback)
+
+# 💾 OPTION 3: SAVE
+filename = save_session(user, summary, feedback)
+print(f"\nSession saved to {filename}")
