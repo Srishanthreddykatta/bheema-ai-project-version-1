@@ -8,8 +8,8 @@
 # Computer Vision & Pose
 # ------------------------
 mediapipe==0.10.14
-opencv-python==4.12.0.0
-numpy==2.2.6
+opencv-python==4.9.0.80
+numpy==1.26.4
 
 # ------------------------
 # Signal Processing / Utils
