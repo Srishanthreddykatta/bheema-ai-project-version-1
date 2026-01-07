@@ -24,3 +24,4 @@ class PoseDetector:
             landmarks,
             self.mp_pose.POSE_CONNECTIONS
         )
+        return frame

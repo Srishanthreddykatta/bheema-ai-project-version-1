@@ -1,19 +1,17 @@
+import math
 import numpy as np
 
-def calculate_angle(a, b, c):
-    """
-    Calculates angle at point b (in degrees)
-    a, b, c are (x, y) tuples
-    """
-    a = np.array(a)
-    b = np.array(b)
-    c = np.array(c)
-
-    ba = a - b
-    bc = c - b
-
-    cosine_angle = np.dot(ba, bc) / (
-        np.linalg.norm(ba) * np.linalg.norm(bc) + 1e-6
-    )
-    angle = np.arccos(np.clip(cosine_angle, -1.0, 1.0))
-    return np.degrees(angle)
+def calculate_angle(p1, p2, p3):
+    """Calculate angle between three points."""
+    x1, y1 = p1.x, p1.y
+    x2, y2 = p2.x, p2.y
+    x3, y3 = p3.x, p3.y
+    
+    v1 = np.array([x1 - x2, y1 - y2])
+    v2 = np.array([x3 - x2, y3 - y2])
+    
+    cos_angle = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-6)
+    cos_angle = np.clip(cos_angle, -1, 1)
+    angle = math.degrees(math.acos(cos_angle))
+    
+    return angle
